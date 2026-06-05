@@ -2391,6 +2391,7 @@ ifeq ($(HAVE_NETWORKING), 1)
              network/cloud_sync/webdav.o \
              network/cloud_sync_driver.o
       ifeq ($(HAVE_SSL), 1)
+         HAVE_S3 = 1
          OBJ += network/cloud_sync/google_drive.o
       endif
       ifneq (,$(filter 1,$(HAVE_SMBCLIENT) $(HAVE_BUILTINSMBCLIENT)))
