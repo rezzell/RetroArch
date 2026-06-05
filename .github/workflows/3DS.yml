@@ -3,6 +3,12 @@ name: CI 3DS
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: false
+        type: string
   repository_dispatch:
     types: [run_build]
 
@@ -21,6 +27,8 @@ jobs:
 
     steps:
     - uses: taiki-e/checkout-action@v1
+      with:
+        ref: ${{ inputs.ref || github.event.client_payload.ref || github.ref }}
     
     - name: Compile Salamander
       run: |
