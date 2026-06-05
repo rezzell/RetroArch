@@ -3,6 +3,12 @@ name: CI Windows (MSYS2)
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: false
+        type: string
   repository_dispatch:
     types: [run_build]
 
@@ -32,6 +38,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.event.client_payload.ref || github.ref }}
 
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
