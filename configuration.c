@@ -2710,6 +2710,7 @@ static struct config_uint_setting *populate_settings_uint(
    SETTING_UINT("cheevos_visibility_summary",    &settings->uints.cheevos_visibility_summary, true, DEFAULT_CHEEVOS_VISIBILITY_SUMMARY, false);
 #endif
    SETTING_UINT("accessibility_narrator_speech_speed", &settings->uints.accessibility_narrator_speech_speed, true, DEFAULT_ACCESSIBILITY_NARRATOR_SPEECH_SPEED, false);
+   SETTING_UINT("accessibility_narrator_engine", &settings->uints.accessibility_narrator_engine, true, DEFAULT_ACCESSIBILITY_NARRATOR_ENGINE, false);
    SETTING_UINT("ai_service_mode",              &settings->uints.ai_service_mode,            true, DEFAULT_AI_SERVICE_MODE, false);
    SETTING_UINT("ai_service_target_lang",       &settings->uints.ai_service_target_lang,     true, 0, false);
    SETTING_UINT("ai_service_source_lang",       &settings->uints.ai_service_source_lang,     true, 0, false);
@@ -4018,7 +4019,7 @@ static bool config_load_file(global_t *global,
    if (!path_is_empty(RARCH_PATH_CONFIG_OVERRIDE) && !without_overrides)
    {
       char tmp_append_path[PATH_MAX_LENGTH];
-      const char *extra_path = NULL;
+      char *extra_path = NULL;
 #ifdef HAVE_OVERLAY
       char old_overlay_path[PATH_MAX_LENGTH], new_overlay_path[PATH_MAX_LENGTH];
       config_get_path(conf, "input_overlay", old_overlay_path, sizeof(old_overlay_path));
@@ -5908,13 +5909,19 @@ bool config_save_file(const char *path)
             input_driver_state_t *input_st = input_state_get_ptr();
             input_device_info_t saved_device_info[MAX_INPUT_DEVICES];
             retro_keybind_set *saved_autoconf_binds;
+            /* Heap-allocated: MAX_USERS * sizeof(retro_keybind_set) is
+             * ~51KB, too large for the stack on small-stack platforms.
+             * Matches defaults_binds / saved_autoconf_binds above. */
+            retro_keybind_set *saved_binds;
 #ifdef HAVE_LANGEXTRA
             unsigned saved_user_language = *msg_hash_get_uint(MSG_HASH_USER_LANGUAGE);
 #endif
 
             /* Save current input_config_binds */
-            retro_keybind_set saved_binds[MAX_USERS];
-            memcpy(saved_binds, input_config_binds, sizeof(saved_binds));
+            saved_binds = (retro_keybind_set*)calloc(MAX_USERS, sizeof(retro_keybind_set));
+            if (saved_binds)
+               memcpy(saved_binds, input_config_binds,
+                     MAX_USERS * sizeof(retro_keybind_set));
 
             /* Save current input_autoconf_binds (deep copy with string duplication) */
             saved_autoconf_binds = (retro_keybind_set*)calloc(MAX_USERS, sizeof(retro_keybind_set));
@@ -5958,7 +5965,12 @@ bool config_save_file(const char *path)
             config_st = saved_config_st;
 
             /* Restore input_config_binds */
-            memcpy(input_config_binds, saved_binds, sizeof(saved_binds));
+            if (saved_binds)
+            {
+               memcpy(input_config_binds, saved_binds,
+                     MAX_USERS * sizeof(retro_keybind_set));
+               free(saved_binds);
+            }
 
             /* Restore input_device_info */
             memcpy(input_st->input_device_info, saved_device_info,
@@ -6518,8 +6530,7 @@ int8_t config_save_overrides(enum override_type type,
    int tmp_i                                   = 0;
    unsigned i                                  = 0;
    int8_t ret                                  = 0;
-   retro_keybind_set input_override_binds[MAX_USERS]
-                                               = {0};
+   retro_keybind_set *input_override_binds     = NULL;
    config_file_t *conf                         = NULL;
    settings_t *settings                        = NULL;
    struct config_bool_setting *bool_settings   = NULL;
@@ -6564,6 +6575,12 @@ int8_t config_save_overrides(enum override_type type,
 
    settings = (settings_t*)calloc(1, sizeof(settings_t));
    conf     = config_file_new_alloc();
+   /* MAX_USERS * sizeof(retro_keybind_set) is ~51KB; keep it off the
+    * stack (this function is reachable on small-stack platforms such
+    * as the 3DS). Allocated here so it shares the OOM bail below and
+    * is freed at the function-end cleanup. */
+   input_override_binds = (retro_keybind_set*)calloc(
+         MAX_USERS, sizeof(retro_keybind_set));
 
    /* NULL-check: both calloc and config_file_new_alloc can
     * return NULL on OOM.  config_load_file at line ~6552
@@ -6577,11 +6594,12 @@ int8_t config_save_overrides(enum override_type type,
     * Return -1 to signal hard failure (as distinct from
     * 'override was not needed' = false/0 at line 6529).
     * int8_t return value accommodates -1. */
-   if (!settings || !conf)
+   if (!settings || !conf || !input_override_binds)
    {
       if (conf)
          config_file_free(conf);
       free(settings);
+      free(input_override_binds);
       return -1;
    }
 
@@ -6599,7 +6617,7 @@ int8_t config_save_overrides(enum override_type type,
       path_mkdir(override_directory);
 
    /* Store current binds as override binds */
-   memcpy(input_override_binds, input_config_binds, sizeof(input_override_binds));
+   memcpy(input_override_binds, input_config_binds, sizeof(input_config_binds));
 
    /* Load the original config file in memory */
    config_load_file(global_get_ptr(),
@@ -6921,6 +6939,7 @@ int8_t config_save_overrides(enum override_type type,
    if (size_overrides)
       free(size_overrides);
    free(settings);
+   free(input_override_binds);
 
    return ret;
 }
