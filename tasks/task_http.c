@@ -51,9 +51,56 @@ struct http_handle
 
 typedef struct http_handle http_handle_t;
 
+#ifndef TASK_HTTP_TEST
+static const struct task_http_net_driver task_http_default_net_driver = {
+   net_http_connection_new,
+   net_http_connection_iterate,
+   net_http_connection_done,
+   net_http_connection_free,
+   net_http_connection_set_user_agent,
+   net_http_connection_set_headers,
+   net_http_connection_set_content,
+   net_http_connection_url,
+   net_http_connection_method,
+   net_http_new,
+   net_http_update,
+   net_http_status,
+   net_http_error,
+   net_http_headers_ex,
+   net_http_data,
+   net_http_delete
+};
+#else
+static const struct task_http_net_driver task_http_default_net_driver = {0};
+#endif
+
+static const struct task_http_net_driver *task_http_net_driver =
+      &task_http_default_net_driver;
+
+static const struct task_http_net_driver *task_http_get_net_driver(void)
+{
+   return task_http_net_driver
+      ? task_http_net_driver
+      : &task_http_default_net_driver;
+}
+
+#ifdef TASK_HTTP_TEST
+void task_http_set_net_driver(const struct task_http_net_driver *driver)
+{
+   task_http_net_driver = driver ? driver : &task_http_default_net_driver;
+}
+
+void task_http_reset_net_driver(void)
+{
+   task_http_net_driver = &task_http_default_net_driver;
+}
+#endif
+
 static int task_http_con_iterate_transfer(http_handle_t *http)
 {
-   if (!net_http_connection_iterate(http->connection.handle))
+   const struct task_http_net_driver *net = task_http_get_net_driver();
+
+   if (!net->connection_iterate(http->connection.handle))
       return -1;
    return 0;
 }
@@ -61,13 +108,15 @@ static int task_http_con_iterate_transfer(http_handle_t *http)
 static int task_http_conn_iterate_transfer_parse(
       http_handle_t *http)
 {
-   if (net_http_connection_done(http->connection.handle))
+   const struct task_http_net_driver *net = task_http_get_net_driver();
+
+   if (net->connection_done(http->connection.handle))
    {
       if (http->connection.handle && http->connection.cb)
          http->connection.cb(http, 0);
    }
 
-   net_http_connection_free(http->connection.handle);
+   net->connection_free(http->connection.handle);
 
    http->connection.handle = NULL;
 
@@ -77,6 +126,7 @@ static int task_http_conn_iterate_transfer_parse(
 static int cb_http_conn_default(void *data_, size_t len)
 {
    http_handle_t *http = (http_handle_t*)data_;
+   const struct task_http_net_driver *net = task_http_get_net_driver();
 
    if (!http)
       return -1;
@@ -84,7 +134,7 @@ static int cb_http_conn_default(void *data_, size_t len)
    if (!network_init())
       return -1;
 
-   if (!(http->handle = net_http_new(http->connection.handle)))
+   if (!(http->handle = net->http_new(http->connection.handle)))
    {
       http->error = true;
       return -1;
@@ -104,13 +154,14 @@ static int cb_http_conn_default(void *data_, size_t len)
 static int task_http_iterate_transfer(retro_task_t *task)
 {
    http_handle_t *http  = (http_handle_t*)task->state;
+   const struct task_http_net_driver *net = task_http_get_net_driver();
    size_t pos  = 0, tot = 0;
 
    /* FIXME: This wouldn't be needed if we could wait for a timeout */
    if (task_queue_is_threaded())
       retro_sleep(1);
 
-   if (!net_http_update(http->handle, &pos, &tot))
+   if (!net->http_update(http->handle, &pos, &tot))
    {
       if (tot == 0)
          task_set_progress(task, -1);
@@ -164,11 +215,12 @@ task_finished:
 
    if (http->handle)
    {
+      const struct task_http_net_driver *net = task_http_get_net_driver();
       size_t _len = 0;
-      char   *tmp = (char*)net_http_data(http->handle, &_len, false);
+      char   *tmp = (char*)net->http_data(http->handle, &_len, false);
 
       if (!tmp)
-         tmp = (char*)net_http_data(http->handle, &_len, true);
+         tmp = (char*)net->http_data(http->handle, &_len, true);
 
       if ((flg & RETRO_TASK_FLG_CANCELLED) > 0)
       {
@@ -198,19 +250,19 @@ task_finished:
             bool mute;
             data->data    = tmp;
             data->len     = _len;
-            data->headers = net_http_headers_ex(http->handle, http->headers_accept_err);
-            data->status  = net_http_status(http->handle);
+            data->headers = net->http_headers_ex(http->handle, http->headers_accept_err);
+            data->status  = net->http_status(http->handle);
 
             task_set_data(task, data);
 
             mute          = ((task->flags & RETRO_TASK_FLG_MUTE) > 0);
 
-            if (!mute && net_http_error(http->handle))
+            if (!mute && net->http_error(http->handle))
                task_set_error(task, strldup("Download failed.",
                   sizeof("Download failed.")));
          }
       }
-      net_http_delete(http->handle);
+      net->http_delete(http->handle);
    }
    else if (http->error)
       task_set_error(task, strldup("Internal error.",
@@ -249,11 +301,12 @@ static void *task_push_http_transfer_generic_titled(
    retro_task_t  *t        = NULL;
    http_handle_t *http     = NULL;
    const char    *method   = NULL;
+   const struct task_http_net_driver *net = task_http_get_net_driver();
 
    if (!conn)
       return NULL;
 
-   method = net_http_connection_method(conn);
+   method = net->connection_method(conn);
 
    /* net_http_connection_new() permits a NULL method, so
     * net_http_connection_method() may legitimately return NULL here.
@@ -276,7 +329,7 @@ static void *task_push_http_transfer_generic_titled(
       /* Concurrent download of the same file is not allowed */
       if (task_queue_find(&find_data))
       {
-         net_http_connection_free(conn);
+         net->connection_free(conn);
          return NULL;
       }
    }
@@ -327,7 +380,7 @@ static void *task_push_http_transfer_generic_titled(
 
 error:
    if (conn)
-      net_http_connection_free(conn);
+      net->connection_free(conn);
    if (http)
       free(http);
 
@@ -349,7 +402,8 @@ void* task_push_http_transfer(const char *url, bool mute,
 {
    if (url && *url)
       return task_push_http_transfer_generic(
-            net_http_connection_new(url, type ? type : "GET", NULL),
+            task_http_get_net_driver()->connection_new(
+               url, type ? type : "GET", NULL),
             url, mute, false, cb, user_data);
    return NULL;
 }
@@ -362,11 +416,12 @@ void *task_push_webdav_stat(const char *url, bool mute, const char *headers,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, "OPTIONS", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, "OPTIONS", NULL)))
       return NULL;
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -380,11 +435,12 @@ void* task_push_webdav_mkdir(const char *url, bool mute,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, "MKCOL", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, "MKCOL", NULL)))
       return NULL;
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -400,18 +456,20 @@ void* task_push_webdav_put(const char *url,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, "PUT", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, "PUT", NULL)))
       return NULL;
 
    _len = strlcpy(expect, "Expect: 100-continue\r\n", sizeof(expect));
    if (headers)
    {
       strlcpy(expect + _len, headers, sizeof(expect) - _len);
-      net_http_connection_set_headers(conn, expect);
+      task_http_get_net_driver()->connection_set_headers(conn, expect);
    }
 
    if (put_data)
-      net_http_connection_set_content(conn, NULL, len, put_data);
+      task_http_get_net_driver()->connection_set_content(
+            conn, NULL, len, put_data);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -425,11 +483,12 @@ void* task_push_webdav_delete(const char *url, bool mute,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, "DELETE", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, "DELETE", NULL)))
       return NULL;
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -445,7 +504,8 @@ void *task_push_webdav_move(const char *url,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, "MOVE", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, "MOVE", NULL)))
       return NULL;
 
    _len  = strlcpy(dest_header, "Destination: ", sizeof(dest_header));
@@ -455,7 +515,7 @@ void *task_push_webdav_move(const char *url,
    if (headers)
       strlcpy(dest_header + _len, headers, sizeof(dest_header) - _len);
 
-   net_http_connection_set_headers(conn, dest_header);
+   task_http_get_net_driver()->connection_set_headers(conn, dest_header);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, userdata);
 }
@@ -492,7 +552,7 @@ void* task_push_http_transfer_file(const char* url, bool mute,
 
    /* should be using type but some callers now rely on type being ignored */
    return task_push_http_transfer_generic_titled(
-         net_http_connection_new(url, "GET", NULL),
+         task_http_get_net_driver()->connection_new(url, "GET", NULL),
          url, mute, false, tmp, cb, transfer_data);
 }
 
@@ -505,11 +565,12 @@ void* task_push_http_transfer_with_user_agent(const char *url, bool mute,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, type ? type : "GET", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, type ? type : "GET", NULL)))
       return NULL;
 
    if (user_agent)
-      net_http_connection_set_user_agent(conn, user_agent);
+      task_http_get_net_driver()->connection_set_user_agent(conn, user_agent);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -523,11 +584,12 @@ void* task_push_http_transfer_with_headers(const char *url, bool mute,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, type ? type : "GET", NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, type ? type : "GET", NULL)))
       return NULL;
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -538,7 +600,8 @@ void* task_push_http_post_transfer(const char *url,
 {
    if (url && *url)
       return task_push_http_transfer_generic(
-            net_http_connection_new(url, type ? type : "POST", post_data),
+            task_http_get_net_driver()->connection_new(
+               url, type ? type : "POST", post_data),
             url, mute, false, cb, user_data);
    return NULL;
 }
@@ -553,11 +616,12 @@ void* task_push_http_post_transfer_with_user_agent(const char *url,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, type ? type : "POST", post_data)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, type ? type : "POST", post_data)))
       return NULL;
 
    if (user_agent)
-      net_http_connection_set_user_agent(conn, user_agent);
+      task_http_get_net_driver()->connection_set_user_agent(conn, user_agent);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -572,11 +636,12 @@ void* task_push_http_post_transfer_with_headers(const char *url,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, type ? type : "POST", post_data)))
+   if (!(conn = task_http_get_net_driver()->connection_new(
+         url, type ? type : "POST", post_data)))
       return NULL;
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute, false, cb, user_data);
 }
@@ -591,15 +656,15 @@ void *task_push_http_transfer_with_content(const char *url,
    if (!url || !*url)
       return NULL;
 
-   if (!(conn = net_http_connection_new(url, method, NULL)))
+   if (!(conn = task_http_get_net_driver()->connection_new(url, method, NULL)))
       return NULL;
 
    if (content && content_len)
-      net_http_connection_set_content(conn, content_type,
+      task_http_get_net_driver()->connection_set_content(conn, content_type,
             content_len, content);
 
    if (headers)
-      net_http_connection_set_headers(conn, headers);
+      task_http_get_net_driver()->connection_set_headers(conn, headers);
 
    return task_push_http_transfer_generic(conn, url, mute,
          headers_accept_err, cb, user_data);

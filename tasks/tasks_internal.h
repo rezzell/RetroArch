@@ -73,6 +73,40 @@ typedef struct
    int status;
 } http_transfer_data_t;
 
+struct http_t;
+struct http_connection_t;
+
+struct task_http_net_driver
+{
+   struct http_connection_t *(*connection_new)(
+         const char *url, const char *method, const char *data);
+   bool (*connection_iterate)(struct http_connection_t *conn);
+   bool (*connection_done)(struct http_connection_t *conn);
+   void (*connection_free)(struct http_connection_t *conn);
+   void (*connection_set_user_agent)(
+         struct http_connection_t *conn, const char *user_agent);
+   void (*connection_set_headers)(
+         struct http_connection_t *conn, const char *headers);
+   void (*connection_set_content)(struct http_connection_t *conn,
+         const char *content_type, size_t content_length, const void *content);
+   const char *(*connection_url)(struct http_connection_t *conn);
+   const char *(*connection_method)(struct http_connection_t *conn);
+   struct http_t *(*http_new)(struct http_connection_t *conn);
+   bool (*http_update)(struct http_t *state, size_t *progress, size_t *total);
+   int (*http_status)(struct http_t *state);
+   bool (*http_error)(struct http_t *state);
+   struct string_list *(*http_headers_ex)(
+         struct http_t *state, bool accept_error);
+   uint8_t *(*http_data)(struct http_t *state,
+         size_t *len, bool accept_error);
+   void (*http_delete)(struct http_t *state);
+};
+
+#ifdef TASK_HTTP_TEST
+void task_http_set_net_driver(const struct task_http_net_driver *driver);
+void task_http_reset_net_driver(void);
+#endif
+
 void *task_push_http_transfer(const char *url, bool mute, const char *type,
       retro_task_callback_t cb, void *userdata);
 

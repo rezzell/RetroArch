@@ -100,6 +100,9 @@ jobs:
           test -x http_method_match_test
           timeout 60 ./http_method_match_test
           echo "[pass] http_method_match_test"
+          test -x task_http_harness_test
+          timeout 60 ./task_http_harness_test
+          echo "[pass] task_http_harness_test"
 
       - name: Build and run video_shader_wildcard_test (ASan)
         shell: bash
